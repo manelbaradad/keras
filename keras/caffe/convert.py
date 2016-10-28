@@ -44,7 +44,7 @@ def caffe_to_keras(prototext, caffemodel, phase='train', debug=False):
         
         params = caffe.NetParameter()
         params.MergeFromString(open(caffemodel, 'rb').read())
-        
+
         if len(params.layers) != 0:
             param_layers = params.layers[:]    # V1
             v = 'V1'
@@ -137,6 +137,7 @@ def create_model(layers, phase, input_dim, debug=False):
     for layer_nb in network:
         layer = layers[layer_nb]
         name = layer.name
+
         type_of_layer = layer_type(layer)
         
         # case of inputs
@@ -166,7 +167,7 @@ def create_model(layers, phase, input_dim, debug=False):
                 axis = layer.concat_param.axis
                 net_node[layer_nb] = merge(input_layers, mode='concat', concat_axis=1, name=name)
                 
-            elif type_of_layer == 'convolution':
+            elif type_of_layer == 'convolution' :
                 has_bias = layer.convolution_param.bias_term
                 nb_filter = layer.convolution_param.num_output
                 nb_col = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_h])[0]
@@ -187,7 +188,19 @@ def create_model(layers, phase, input_dim, debug=False):
                 if pad_h + pad_w > 0:
                     input_layers = ZeroPadding2D(padding=(pad_h, pad_w), name=name + '_zeropadding')(input_layers)
                 net_node[layer_nb] = Convolution2D(nb_filter, nb_row, nb_col, bias=has_bias, subsample=(stride_h, stride_w), name=name)(input_layers)
-                
+            elif type_of_layer == 'deconvolution':
+                #TODO: add padding, which in deconvolution is removing the padding
+                has_bias = layer.convolution_param.bias_term
+                nb_filter = layer.convolution_param.num_output
+                nb_col = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_h])[0]
+                nb_row = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_w])[0]
+                #subsample, which is oversampling in deconvolution defaults to one
+                stride_h = (layer.convolution_param.stride or [layer.convolution_param.stride_h])[0] or 1
+                stride_w = (layer.convolution_param.stride or [layer.convolution_param.stride_w])[0] or 1
+
+                print 'WARNING: keras deconvolution requires specifying the batch size, which has been set to 16'
+                net_node[layer_nb] = Deconvolution2D(nb_filter, nb_row, nb_col, (16, nb_filter, input_layers[0]._keras_shape[2]*stride_h, input_layers[0]._keras_shape[3]*stride_w), bias=has_bias,
+                                                   subsample=(stride_h, stride_w), name=name)(input_layers)
             elif type_of_layer == 'dropout':
                 prob = layer.dropout_param.dropout_ratio
                 net_node[layer_nb] = Dropout(prob, name=name)(input_layers)
@@ -263,7 +276,17 @@ def create_model(layers, phase, input_dim, debug=False):
 
             elif type_of_layer == 'tanh':
                 net_node[layer_nb] = Activation('tanh', name=name)(input_layers)
+            elif type_of_layer == 'crop':
+                crop_axis = layer.crop_param.axis
+                if crop_axis == 2:
+                    original = input_layers[1]._keras_shape[2:]
+                    target = input_layers[0]._keras_shape[2:]
+                    offset = layer.crop_param.offset
+                    if len(offset) == 1:
+                        offset = [offset[0], offset[0]]
+                    net_node[layer_nb] = Cropping2D(cropping=((offset[0],original[0] - offset[0] - target[0]),(offset[1], original[1] - offset[1] - target[1])))(input_layers[1])
 
+                #TODO: else
             elif type_of_layer == 'batchnorm':
                 axis = layer.scale_param.axis
                 epsilon = layer.batch_norm_param.eps
@@ -303,7 +326,6 @@ def create_model(layers, phase, input_dim, debug=False):
 
             else:
                 raise RuntimeError('layer type', type_of_layer, 'used in this model is not currently supported')
-
     input_l = [None]*(len(inputs))
     output_l = [None]*(len(network_outputs))
     
@@ -325,9 +347,9 @@ def rot90(W):
 
 def convert_weights(param_layers, v='V1', debug=False):
     weights = {}
-
     for layer in param_layers:
         typ = layer_type(layer)
+        print typ
         if typ == 'innerproduct':
             blobs = layer.blobs
 
@@ -354,7 +376,7 @@ def convert_weights(param_layers, v='V1', debug=False):
             weights_p = weights_p.T     # need to swapaxes here, hence transpose. See comment in conv
             weights_b = np.array(blobs[1].data)
             layer_weights = [weights_p.astype(dtype=np.float32), weights_b.astype(dtype=np.float32)]
-            
+
             weights[layer.name] = layer_weights
 
         elif typ == 'batchnorm':
@@ -366,7 +388,7 @@ def convert_weights(param_layers, v='V1', debug=False):
 
             weights_mean = np.array(blobs[0].data)
             weights_std_dev = np.array(blobs[1].data)
-            
+
             weights[layer.name] = [np.ones(nb_kernels), np.zeros(nb_kernels), weights_mean.astype(dtype=np.float32), weights_std_dev.astype(dtype=np.float32)]
 
         elif typ == 'scale':
@@ -383,7 +405,7 @@ def convert_weights(param_layers, v='V1', debug=False):
 
             weights[layer.name] = [weights_gamma.astype(dtype=np.float32), weights_beta.astype(dtype=np.float32)]
 
-        elif typ == 'convolution':
+        elif typ == 'convolution' or type == 'deconvolution':
             blobs = layer.blobs
 
             if(v == 'V1'):
@@ -432,9 +454,9 @@ def convert_weights(param_layers, v='V1', debug=False):
 
             for i in range(group):
                 group_weights = weights_p[i * nb_filter_per_group: (i + 1) * nb_filter_per_group,
-                                          i * stacks_size_per_group: (i + 1) * stacks_size_per_group, :, :]
+                                i * stacks_size_per_group: (i + 1) * stacks_size_per_group, :, :]
                 group_weights[:] = np.array(blobs[0].data[i * group_data_size:
-                                            (i + 1) * group_data_size]).reshape(group_weights.shape)
+                (i + 1) * group_data_size]).reshape(group_weights.shape)
 
             # caffe, unlike theano, does correlation not convolution. We need to flip the weights 180 deg
             weights_p = rot90(weights_p)
@@ -453,5 +475,3 @@ def load_weights(model, weights):
     for layer in model.layers:
         if weights.has_key(layer.name):
             model.get_layer(layer.name).set_weights(weights[layer.name])
-
-
