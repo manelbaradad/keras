@@ -166,7 +166,7 @@ def create_model(layers, phase, input_dim, debug=False):
                 axis = layer.concat_param.axis
                 net_node[layer_nb] = merge(input_layers, mode='concat', concat_axis=1, name=name)
                 
-            elif type_of_layer == 'convolution':
+            elif type_of_layer == 'convolution' :
                 has_bias = layer.convolution_param.bias_term
                 nb_filter = layer.convolution_param.num_output
                 nb_col = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_h])[0]
@@ -187,7 +187,18 @@ def create_model(layers, phase, input_dim, debug=False):
                 if pad_h + pad_w > 0:
                     input_layers = ZeroPadding2D(padding=(pad_h, pad_w), name=name + '_zeropadding')(input_layers)
                 net_node[layer_nb] = Convolution2D(nb_filter, nb_row, nb_col, bias=has_bias, subsample=(stride_h, stride_w), name=name)(input_layers)
-                
+            elif type_of_layer == 'deconvolution':
+                #TODO: add padding, which in deconvolution is removing the padding
+                has_bias = layer.convolution_param.bias_term
+                nb_filter = layer.convolution_param.num_output
+                nb_col = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_h])[0]
+                nb_row = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_w])[0]
+                stride_h = (layer.convolution_param.stride or [layer.convolution_param.stride_h])[0] or 1
+                stride_w = (layer.convolution_param.stride or [layer.convolution_param.stride_w])[0] or 1
+
+                input_layers = UpSampling2D(size=(nb_row, nb_col), name=name + '_deconv_up')(input_layers)
+                net_node[layer_nb] = Convolution2D(nb_filter, nb_row, nb_col, bias=has_bias,
+                                                   subsample=(nb_row-stride_h, nb_col - stride_w), name=name)(input_layers)
             elif type_of_layer == 'dropout':
                 prob = layer.dropout_param.dropout_ratio
                 net_node[layer_nb] = Dropout(prob, name=name)(input_layers)
@@ -263,7 +274,17 @@ def create_model(layers, phase, input_dim, debug=False):
 
             elif type_of_layer == 'tanh':
                 net_node[layer_nb] = Activation('tanh', name=name)(input_layers)
+            elif type_of_layer == 'crop':
+                crop_axis = layer.crop_param.axis
+                if crop_axis == 2:
+                    target = input_layers[0]._keras_shape[2:]
+                    original = input_layers[1]._keras_shape[2:]
+                    offset = layer.crop_param.offset
+                    if len(offset) == 1:
+                        offset = [offset[0], offset[0]]
+                    net_node[layer_nb] = Cropping2D(cropping=((offset[0],original[0] - offset[0] - target[0]),(offset[1], original[1] - offset[1] - target[1])))(input_layers[1])
 
+                #TODO: else
             elif type_of_layer == 'batchnorm':
                 axis = layer.scale_param.axis
                 epsilon = layer.batch_norm_param.eps
