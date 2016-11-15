@@ -692,7 +692,7 @@ class GRUCond(GRU):
 
         if self.dropout_W or self.dropout_U or self.dropout_V:
             self.uses_learning_phase = True
-        super(AttGRUCond, self).__init__(output_dim, **kwargs)
+        super(GRUCond, self).__init__(output_dim, **kwargs)
 
     def build(self, input_shape):
         assert len(input_shape) == 2 or len(input_shape) == 3, 'You should pass two inputs to LSTMAttnCond ' \
@@ -852,7 +852,7 @@ class GRUCond(GRU):
         if self.stateful:
             initial_states = self.states
         else:
-            initial_states = self.get_initial_states(self.context)
+            initial_states = self.get_initial_states(state_below)
 
         constants, B_V = self.get_constants(state_below)
         preprocessed_input = self.preprocess_input(state_below, B_V)
@@ -955,13 +955,13 @@ class GRUCond(GRU):
     def get_initial_states(self, x):
         # build an all-zero tensor of shape (samples, output_dim)
         if self.init_state is None:
-            initial_state = K.zeros_like(x)  # (samples, intput_timesteps, ctx_dim)
-            initial_state = K.sum(initial_state, axis=1)  # (samples, ctx_dim)
-            reducer = K.ones((self.context_dim, self.output_dim))
+        # build an all-zero tensor of shape (samples, output_dim)
+            initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
+            initial_state = K.sum(initial_state, axis=(1, 2))  # (samples,)
+            initial_state = K.expand_dims(initial_state)  # (samples, 1)
+            initial_state = K.tile(initial_state, [1, self.output_dim]) # (samples, output_dim)
         else:
             initial_state = self.init_state
-            reducer = K.ones((self.output_dim, self.output_dim))
-        initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
         initial_states = [initial_state]
 
         return initial_states
@@ -1285,7 +1285,7 @@ class AttGRUCond(GRU):
         if self.stateful:
             initial_states = self.states
         else:
-            initial_states = self.get_initial_states(self.context)
+            initial_states = self.get_initial_states(state_below)
 
         constants, B_V = self.get_constants(state_below, mask[1])
         preprocessed_input = self.preprocess_input(state_below, B_V)
@@ -1314,7 +1314,7 @@ class AttGRUCond(GRU):
         if self.return_states:
             if not isinstance(ret, list):
                 ret = [ret]
-            ret += [states[0], states[1]]
+            ret += [states[0]]
 
         return ret
 
@@ -1330,6 +1330,14 @@ class AttGRUCond(GRU):
             ret += [mask[0]]
 
         return ret
+
+    def get_alignments(self, pctx_, h_tm1):
+        # AttModel (see Formulation in class header)
+        p_state_ = K.dot(h_tm1, self.Wa)
+        pctx_ = K.tanh(pctx_ +  p_state_[:, None, :])
+        e = K.dot(pctx_, self.wa) + self.ca
+        alphas_shape = e.shape
+        return K.softmax(e.reshape([alphas_shape[0], alphas_shape[1]]))
 
     def step(self, x, states):
         h_tm1 = states[0]  # previous memory
@@ -1453,22 +1461,20 @@ class AttGRUCond(GRU):
     def get_initial_states(self, x):
         # build an all-zero tensor of shape (samples, output_dim)
         if self.init_state is None:
-            initial_state = K.zeros_like(x)  # (samples, intput_timesteps, ctx_dim)
-            initial_state = K.sum(initial_state, axis=1)  # (samples, ctx_dim)
-            reducer = K.ones((self.context_dim, self.output_dim))
+            # build an all-zero tensor of shape (samples, output_dim)
+            initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
+            initial_state = K.sum(initial_state, axis=(1, 2))  # (samples,)
+            initial_state = K.expand_dims(initial_state)  # (samples, 1)
+            initial_state = K.tile(initial_state, [1, self.output_dim]) # (samples, output_dim)
         else:
             initial_state = self.init_state
-            reducer = K.ones((self.output_dim, self.output_dim))
-        initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
+
         initial_states = [initial_state]
 
-        initial_state = K.zeros_like(x)  # (samples, intput_timesteps, ctx_dim)
-        initial_state_alphas = K.sum(initial_state, axis=2)  # (samples, input_timesteps)
-        initial_state = K.sum(initial_state, axis=1)  # (samples, ctx_dim)
-        reducer = K.ones((self.context_dim, self.context_dim))
-        #reducer_alphas = K.ones((self.context_steps, self.context_steps))
-        extra_states = [K.dot(initial_state, reducer), initial_state_alphas]  # (samples, ctx_dim)
-                        #K.dot(initial_state_alphas, reducer_alphas)]
+        initial_state = K.zeros_like(self.context)            # (samples, intput_timesteps, ctx_dim)
+        initial_state_alphas = K.sum(initial_state, axis=2)   # (samples, input_timesteps)
+        initial_state = K.sum(initial_state, axis=1)          # (samples, ctx_dim)
+        extra_states = [initial_state, initial_state_alphas]  # (samples, ctx_dim)
 
         return initial_states + extra_states
 
@@ -1673,10 +1679,11 @@ class LSTM(Recurrent):
     def get_initial_states(self, x):
         # build an all-zero tensor of shape (samples, output_dim)
         if self.init_state is None:
+            # build an all-zero tensor of shape (samples, output_dim)
             initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
-            initial_state = K.sum(initial_state, axis=1)  # (samples, input_dim)
-            reducer = K.ones((self.input_dim, self.output_dim))
-            initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
+            initial_state = K.sum(initial_state, axis=(1, 2))  # (samples,)
+            initial_state = K.expand_dims(initial_state)  # (samples, 1)
+            initial_state = K.tile(initial_state, [1, self.output_dim]) # (samples, output_dim)
             if self.init_memory is None:
                 initial_states = [initial_state for _ in range(len(self.states))]
                 return initial_states
@@ -1841,7 +1848,9 @@ class LSTMCond(LSTM):
         super(LSTMCond, self).__init__(output_dim, **kwargs)
 
     def build(self, input_shape):
-        assert len(input_shape) == 2 or len(input_shape) == 4, 'You should pass two inputs to LSTMCond (context and previous_embedded_words) and two optional inputs (init_state and init_memory)'
+        assert len(input_shape) == 2 or len(input_shape) == 4, 'You should pass two inputs to LSTMCond ' \
+                                                               '(context and previous_embedded_words) and ' \
+                                                               'two optional inputs (init_state and init_memory)'
 
         if len(input_shape) == 2:
             self.input_spec = [InputSpec(shape=input_shape[0]), InputSpec(shape=input_shape[1])]
@@ -2117,24 +2126,26 @@ class LSTMCond(LSTM):
     def get_initial_states(self, x):
         # build an all-zero tensor of shape (samples, output_dim)
         if self.init_state is None:
-            initial_state = K.zeros_like(x[:, 0, :])  # (samples, ctx_dim)
-            reducer = K.ones((self.input_dim, self.output_dim))
-            initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
+            # build an all-zero tensor of shape (samples, output_dim)
+            initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
+            initial_state = K.sum(initial_state, axis=(1, 2))  # (samples,)
+            initial_state = K.expand_dims(initial_state)  # (samples, 1)
+            initial_state = K.tile(initial_state, [1, self.output_dim])  # (samples, output_dim)
             if self.init_memory is None:
                 initial_states = [initial_state for _ in range(2)]
             else:
                 initial_memory = self.init_memory
-                reducer = K.ones((self.output_dim, self.output_dim))
-                initial_memory = K.dot(initial_memory, reducer)  # (samples, output_dim)
+                #reducer = K.ones((self.output_dim, self.output_dim))
+                #initial_memory = K.dot(initial_memory, reducer)  # (samples, output_dim)
                 initial_states = [initial_state, initial_memory]
         else:
             initial_state = self.init_state
-            reducer = K.ones((self.output_dim, self.output_dim))
-            initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
+            #reducer = K.ones((self.output_dim, self.output_dim))
+            #initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
             if self.init_memory is not None: # We have state and memory
                 initial_memory = self.init_memory
-                reducer = K.ones((self.output_dim, self.output_dim))
-                initial_memory = K.dot(initial_memory, reducer)  # (samples, output_dim)
+                #reducer = K.ones((self.output_dim, self.output_dim))
+                #initial_memory = K.dot(initial_memory, reducer)  # (samples, output_dim)
                 initial_states = [initial_state, initial_memory]
             else:
                 initial_states = [initial_state for _ in range(2)]
@@ -2884,7 +2895,7 @@ class AttLSTMCond(LSTM):
         if self.stateful:
             initial_states = self.states
         else:
-            initial_states = self.get_initial_states(self.context)
+            initial_states = self.get_initial_states(state_below)
 
         constants, B_V = self.get_constants(state_below, mask[1])
         preprocessed_input = self.preprocess_input(state_below, B_V)
@@ -2895,7 +2906,7 @@ class AttLSTMCond(LSTM):
                                              constants=constants,
                                              unroll=self.unroll,
                                              input_length=state_below.shape[1],
-                                             pos_extra_outputs_states=[2,3])
+                                             pos_extra_outputs_states=[2, 3])
         if self.stateful:
             self.updates = []
             for i in range(len(states)):
@@ -2933,44 +2944,41 @@ class AttLSTMCond(LSTM):
 
 
     def step(self, x, states):
-        h_tm1 = states[0]  # State
-        c_tm1 = states[1]  # Memory
-        non_used_x_att = states[2]  # Placeholder for returning extra variables
-        non_used_alphas_att = states[3]  # Placeholder for returning extra variables
-
-        B_U = states[4]    # Dropout U
-        B_W = states[5]    # Dropout W
-
+        h_tm1 = states[0]                                 # State
+        c_tm1 = states[1]                                 # Memory
+        non_used_x_att = states[2]                        # Placeholder for returning extra variables
+        non_used_alphas_att = states[3]                   # Placeholder for returning extra variables
+        B_U = states[4]                                   # Dropout U
+        B_W = states[5]                                   # Dropout W
         # Att model dropouts
-        B_wa = states[6]
-        B_Wa = states[7]
-        pctx_ = states[8]        # Projected context (i.e. context * Ua + ba)
-        context = states[9]      # Original context
-        mask_input = states[10]  # Context mask
-
-        if mask_input.ndim > 1: # Mask the context (only if necessary)
+        B_wa = states[6]                                  # Dropout wa
+        B_Wa = states[7]                                  # Dropout Wa
+        pctx_ = states[8]                                 # Projected context (i.e. context * Ua + ba)
+        context = states[9]                               # Original context
+        mask_input = states[10]                           # Context mask
+        if mask_input.ndim > 1:                           # Mask the context (only if necessary)
             pctx_ = mask_input[:, :, None] * pctx_
-            context = mask_input[:, :, None] * context    # Masked context
+            context = mask_input[:, :, None] * context
 
-        # AttModel (see Formulation in class header)
+        # Attention model (see Formulation in class header)
         p_state_ = K.dot(h_tm1 * B_Wa[0], self.Wa)
         pctx_ = K.tanh(pctx_ +  p_state_[:, None, :])
         e = K.dot(pctx_ * B_wa[0], self.wa) + self.ca
         alphas_shape = e.shape
         alphas = K.softmax(e.reshape([alphas_shape[0], alphas_shape[1]]))
-        ctx_ = (context * alphas[:, :, None]).sum(axis=1) # sum over the in_timesteps dimension resulting in [batch_size, input_dim]
-
+        # sum over the in_timesteps dimension resulting in [batch_size, input_dim]
+        ctx_ = (context * alphas[:, :, None]).sum(axis=1)
         # LSTM
         if self.consume_less == 'gpu':
             z = x + \
+                K.dot(h_tm1 * B_U[0], self.U)  + \
                 K.dot(ctx_ * B_W[0], self.W) + \
-                K.dot(h_tm1 * B_U[0], self.U) + self.b
+                self.b
 
             z0 = z[:, :self.output_dim]
             z1 = z[:, self.output_dim: 2 * self.output_dim]
             z2 = z[:, 2 * self.output_dim: 3 * self.output_dim]
             z3 = z[:, 3 * self.output_dim:]
-
             i = self.inner_activation(z0)
             f = self.inner_activation(z1)
             o = self.inner_activation(z3)
@@ -3052,39 +3060,31 @@ class AttLSTMCond(LSTM):
 
         return constants, B_V
 
+
     def get_initial_states(self, x):
         # build an all-zero tensor of shape (samples, output_dim)
         if self.init_state is None:
-            initial_state = K.zeros_like(x)  # (samples, intput_timesteps, ctx_dim)
-            initial_state = K.sum(initial_state, axis=1)  # (samples, ctx_dim)
-            reducer = K.ones((self.context_dim, self.output_dim))
-            initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
+            initial_state = K.zeros_like(x)  # (samples, timesteps, input_dim)
+            initial_state = K.sum(initial_state, axis=(1, 2))  # (samples,)
+            initial_state = K.expand_dims(initial_state)  # (samples, 1)
+            initial_state = K.tile(initial_state, [1, self.output_dim])  # (samples, output_dim)
             if self.init_memory is None:
                 initial_states = [initial_state for _ in range(2)]
             else:
                 initial_memory = self.init_memory
-                reducer = K.ones((self.output_dim, self.output_dim))
-                initial_memory = K.dot(initial_memory, reducer)  # (samples, output_dim)
                 initial_states = [initial_state, initial_memory]
         else:
             initial_state = self.init_state
-            reducer = K.ones((self.output_dim, self.output_dim))
-            initial_state = K.dot(initial_state, reducer)  # (samples, output_dim)
             if self.init_memory is not None: # We have state and memory
                 initial_memory = self.init_memory
-                reducer = K.ones((self.output_dim, self.output_dim))
-                initial_memory = K.dot(initial_memory, reducer)  # (samples, output_dim)
                 initial_states = [initial_state, initial_memory]
             else:
                 initial_states = [initial_state for _ in range(2)]
 
-        initial_state = K.zeros_like(x)  # (samples, intput_timesteps, ctx_dim)
-        initial_state_alphas = K.sum(initial_state, axis=2)  # (samples, input_timesteps)
-        initial_state = K.sum(initial_state, axis=1)  # (samples, ctx_dim)
-        reducer = K.ones((self.context_dim, self.context_dim))
-        #reducer_alphas = K.ones((self.context_steps, self.context_steps))
-        extra_states = [K.dot(initial_state, reducer), initial_state_alphas]  # (samples, ctx_dim)
-                        #K.dot(initial_state_alphas, reducer_alphas)]
+        initial_state = K.zeros_like(self.context)            # (samples, intput_timesteps, ctx_dim)
+        initial_state_alphas = K.sum(initial_state, axis=2)   # (samples, input_timesteps)
+        initial_state = K.sum(initial_state, axis=1)          # (samples, ctx_dim)
+        extra_states = [initial_state, initial_state_alphas]  # (samples, ctx_dim)
 
         return initial_states + extra_states
 
