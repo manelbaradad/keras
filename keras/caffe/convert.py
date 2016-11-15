@@ -44,7 +44,7 @@ def caffe_to_keras(prototext, caffemodel, phase='train', debug=False):
         
         params = caffe.NetParameter()
         params.MergeFromString(open(caffemodel, 'rb').read())
-
+        
         if len(params.layers) != 0:
             param_layers = params.layers[:]    # V1
             v = 'V1'
@@ -137,7 +137,6 @@ def create_model(layers, phase, input_dim, debug=False):
     for layer_nb in network:
         layer = layers[layer_nb]
         name = layer.name
-
         type_of_layer = layer_type(layer)
         
         # case of inputs
@@ -167,7 +166,7 @@ def create_model(layers, phase, input_dim, debug=False):
                 axis = layer.concat_param.axis
                 net_node[layer_nb] = merge(input_layers, mode='concat', concat_axis=1, name=name)
                 
-            elif type_of_layer == 'convolution' :
+            elif type_of_layer == 'convolution':
                 has_bias = layer.convolution_param.bias_term
                 nb_filter = layer.convolution_param.num_output
                 nb_col = (layer.convolution_param.kernel_size or [layer.convolution_param.kernel_h])[0]
@@ -347,9 +346,9 @@ def rot90(W):
 
 def convert_weights(param_layers, v='V1', debug=False):
     weights = {}
+
     for layer in param_layers:
         typ = layer_type(layer)
-        print typ
         if typ == 'innerproduct':
             blobs = layer.blobs
 
@@ -376,7 +375,7 @@ def convert_weights(param_layers, v='V1', debug=False):
             weights_p = weights_p.T     # need to swapaxes here, hence transpose. See comment in conv
             weights_b = np.array(blobs[1].data)
             layer_weights = [weights_p.astype(dtype=np.float32), weights_b.astype(dtype=np.float32)]
-
+            
             weights[layer.name] = layer_weights
 
         elif typ == 'batchnorm':
@@ -388,7 +387,7 @@ def convert_weights(param_layers, v='V1', debug=False):
 
             weights_mean = np.array(blobs[0].data)
             weights_std_dev = np.array(blobs[1].data)
-
+            
             weights[layer.name] = [np.ones(nb_kernels), np.zeros(nb_kernels), weights_mean.astype(dtype=np.float32), weights_std_dev.astype(dtype=np.float32)]
 
         elif typ == 'scale':
@@ -454,9 +453,9 @@ def convert_weights(param_layers, v='V1', debug=False):
 
             for i in range(group):
                 group_weights = weights_p[i * nb_filter_per_group: (i + 1) * nb_filter_per_group,
-                                i * stacks_size_per_group: (i + 1) * stacks_size_per_group, :, :]
+                                          i * stacks_size_per_group: (i + 1) * stacks_size_per_group, :, :]
                 group_weights[:] = np.array(blobs[0].data[i * group_data_size:
-                (i + 1) * group_data_size]).reshape(group_weights.shape)
+                                            (i + 1) * group_data_size]).reshape(group_weights.shape)
 
             # caffe, unlike theano, does correlation not convolution. We need to flip the weights 180 deg
             weights_p = rot90(weights_p)
@@ -475,3 +474,5 @@ def load_weights(model, weights):
     for layer in model.layers:
         if weights.has_key(layer.name):
             model.get_layer(layer.name).set_weights(weights[layer.name])
+
+
